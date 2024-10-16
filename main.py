@@ -7,6 +7,7 @@ import heapq
 import time
 import logging
 from tqdm import tqdm
+from minigrid.wrappers import FullyObsWrapper
 
 # Set up logging
 logging.basicConfig(filename='agent_training.log', level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -15,7 +16,7 @@ logger = logging.getLogger()
 torch.manual_seed(42)
 
 # Environment setup
-env = gym.make("MiniGrid-Empty-5x5-v0", render_mode="human")
+env = FullyObsWrapper(gym.make("MiniGrid-Empty-5x5-v0", render_mode="human")) #"MiniGrid-Fetch-8x8-N3-v0"
 observation, info = env.reset(seed=42)
 
 # Buffer to store transitions
@@ -23,7 +24,7 @@ demo_buffer = []
 
 # Main loop to collect transition data from user input
 terminated = False
-for action in [2,2,1,2,2]:
+for action in [2,2,1,2,2]: #[0,2,2,2,1,3]:
     if action not in [0, 1, 2, 3, 4, 5, 6]:
         logger.info("Invalid action. Please enter 0, 1, 2, 3, 4, 5, 6.")
         continue
@@ -35,7 +36,7 @@ for action in [2,2,1,2,2]:
     observation = next_observation
 
     if terminated or truncated:
-        observation, info = env.reset()
+        observation, info = env.reset(seed=42)
 
 assert terminated
 
@@ -49,13 +50,13 @@ def test_agent_performance(agent, env, num_trials=5):
     """
     total_steps = 0
     # Get top-k plans for the trial
-    init_observation, _ = env.reset()
+    init_observation, info = env.reset(seed=42)
     start_state = agent.feature_extractor(torch.tensor(init_observation['image'], dtype=torch.float32).unsqueeze(0))
     top_k_plans = agent.get_top_k_plans(start_state, k=num_trials)
     if len(top_k_plans) == 0:
         return None
     for i in range(num_trials):
-        observation, _ = env.reset()
+        observation, info = env.reset(seed=42)
         assert np.all(init_observation['image'] == observation['image'])
         terminated = False
         steps = 0
@@ -384,7 +385,7 @@ for epoch in tqdm(range(20000)):  # Number of optimization epochs
         logger.info(f"ERP: {ERP_loss.item()}, EPT: {EPT_loss.item()}, Match Demo Length: {len(demo_buffer)}, Uniformity: {uniformity_loss.item()}")
 
 # Test the agent on the environment
-test_observation, _ = env.reset()
+test_observation, info = env.reset(seed=42)
 terminated = False
 while not terminated:
     action = agent.get_action(test_observation['image'])
