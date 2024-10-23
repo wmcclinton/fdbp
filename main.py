@@ -8,6 +8,7 @@ import time
 import logging
 from tqdm import tqdm
 from minigrid.wrappers import FullyObsWrapper
+import pandas as pd
 
 # Set up logging
 logging.basicConfig(filename='agent_training.log', level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -72,6 +73,7 @@ def test_agent_performance(agent, env, num_trials=5):
             steps += 1
             if terminated:
                 logger.info("[SUCCESS] Goal reached during testing.")
+                agent.generate_states_via_search("done.csv")
                 break
         total_steps += steps
     return total_steps / num_trials
@@ -255,6 +257,96 @@ class AStarAgent:
             return action
         return env.action_space.sample()  # Random action if no plan found
 
+    def generate_states(self, file_path="graph.csv"):
+        inputs = {}
+        # Initialize the base array
+        base_array = np.array([[[2, 5, 0]] * 5] * 5, dtype=np.uint8)
+        
+        # Add inner 3x3 block with the default values [1, 0, 0]
+        for i in range(1, 4):
+            for j in range(1, 4):
+                if i != 3 or j != 3:
+                    base_array[i][j] = [1, 0, 0]
+                else:
+                    base_array[i][j] = [8, 1, 0]
+        
+        # Loop over each position in the 3x3 block (positions [1,1] to [3,3])
+        for i in range(1, 4):
+            for j in range(1, 4):
+                for k in range(0, 4):
+                    # Create a copy of the base array
+                    modified_array = np.copy(base_array)
+                    
+                    # Swap the value at position (i, j) in the inner block
+                    modified_array[i][j] = [10, k, 0]
+                    
+                    # Print the resulting array
+                    inputs[f"{i}_{j}_{k}"] = modified_array
+
+        # Initialize a list to store all states and a list for the corresponding keys
+        states = []
+        keys = []
+
+        # Extract states from the inputs and store them with corresponding keys
+        for key, val in inputs.items():
+            state = self.feature_extractor(torch.tensor(val, dtype=torch.float32).unsqueeze(0))
+            states.append(state)
+            keys.append(key)
+            for action in range(7):
+                state = self.model(state, action)
+                states.append(state)
+                keys.append(key + f"_{action}")
+
+        # Stack all states into a single tensor for pairwise distance computation
+        states_tensor = torch.cat(states, dim=0)  # Shape: (N, feature_dim), where N is the number of states
+
+        # Compute pairwise distances between all states
+        pairwise_distances = torch.cdist(states_tensor, states_tensor)
+
+        # Convert pairwise distances to a Pandas DataFrame with the keys as index and column names
+        distance_df = pd.DataFrame(pairwise_distances.detach().numpy(), index=keys, columns=keys)
+
+        # Display the DataFrame
+        distance_df.to_csv(file_path)
+
+    def generate_states_via_search(self, file_path="graph.csv"):
+        states = []
+        keys = []
+
+        start_state = self.feature_extractor(torch.tensor(demo_buffer[0][0], dtype=torch.float32).unsqueeze(0))
+        states.append(start_state)
+        keys.append("start")
+        states.append(self.goal_state)
+        keys.append("goal")
+        plans = self.a_star_search(start_state, verbose=True)
+        # Extract states from the inputs and store them with corresponding keys
+        i = 0
+        for key, val in plans.items():
+            state = torch.tensor(key, dtype=torch.float32).unsqueeze(0)
+            states.append(state)
+            keys.append(str(i))
+            i += 1
+            if val is None:
+                continue
+            from_state, action = val
+            from_state = torch.tensor(from_state, dtype=torch.float32).unsqueeze(0)
+            states.append(from_state)
+            keys.append(str(i))
+            states.append(state)
+            keys.append(f"{i}_{action}")
+            i += 1
+
+        # Stack all states into a single tensor for pairwise distance computation
+        states_tensor = torch.cat(states, dim=0)  # Shape: (N, feature_dim), where N is the number of states
+
+        # Convert pairwise distances to a Pandas DataFrame with the keys as index and column names
+        distance_df = pd.DataFrame(states_tensor.detach().numpy(), index=keys)
+
+        # Display the DataFrame
+        distance_df.to_csv(file_path)
+        
+
+
 def compute_uniformity_loss(embeddings, t=2):
     dist_matrix = torch.cdist(embeddings, embeddings, p=2) ** 2
     mask = torch.eye(embeddings.size(0), device=embeddings.device).bool()
@@ -311,6 +403,9 @@ EPSILON = 1e-6
 N = 5  # Number of sub-trajectories to sample
 ETPT_loss = float('inf')
 
+# Call the function to print all arrays
+agent.generate_states_via_search()
+
 for epoch in tqdm(range(20000)):  # Number of optimization epochs
     # Test the top k plans every epoch
     top_k_plans = agent.get_top_k_plans(feature_extractor(torch.tensor(demo_buffer[0][0], dtype=torch.float32).unsqueeze(0)), k=3)
@@ -321,6 +416,7 @@ for epoch in tqdm(range(20000)):  # Number of optimization epochs
         # Test the agent every epoch to see the average number of steps in the environment
         avg_steps = test_agent_performance(agent, env)
         logger.info(f"Epoch {epoch+1}, Average steps to goal: {avg_steps}")
+        agent.generate_states_via_search(f"graph_{epoch}.csv")
         #input("Press Enter to continue...")
 
         # Save model weights
